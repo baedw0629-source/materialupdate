@@ -30,15 +30,36 @@ SHEET_CONFIG = {
 
 # --- 3. 주요 함수 정의 ---
 def load_from_github():
-    """GitHub에서 엑셀 파일을 가져옵니다."""
+    """GitHub에서 엑셀 파일을 가져오며 상태를 출력합니다."""
     if not GITHUB_TOKEN or not REPO_NAME:
-        st.error("Secrets 설정(GITHUB_TOKEN, REPO_NAME)이 필요합니다.")
+        st.error("❌ Secrets 설정(GITHUB_TOKEN, REPO_NAME)을 확인해주세요.")
         return None
-    url = f"https://raw.githubusercontent.com/{REPO_NAME}/{BRANCH}/{DB_FILE}?nocache={datetime.now().timestamp()}"
+    
+    # 레포 이름 형식 확인용 출력
+    # st.write(f"접속 시도 레포: {REPO_NAME}") 
+
+    url = f"https://raw.githubusercontent.com/{REPO_NAME}/{BRANCH}/{DB_FILE}"
     res = requests.get(url)
+    
     if res.status_code == 200:
-        return pd.read_excel(io.BytesIO(res.content), sheet_name=None, engine='openpyxl')
-    return None
+        try:
+            db_dict = pd.read_excel(io.BytesIO(res.content), sheet_name=None, engine='openpyxl')
+            
+            # 시트 이름이 일치하지 않을 경우 경고 표시
+            required_sheets = ["material", "cover"]
+            for s in required_sheets:
+                if s not in db_dict:
+                    st.warning(f"⚠️ 엑셀에 '{s}' 시트가 없습니다. 현재 시트: {list(db_dict.keys())}")
+            return db_dict
+        except Exception as e:
+            st.error(f"❌ 엑셀 읽기 오류: {e}")
+            return None
+    else:
+        # 파일 경로가 틀렸을 때의 상세 메시지
+        st.error(f"❌ 파일을 찾을 수 없습니다. (상태 코드: {res.status_code})")
+        st.info(f"시도한 URL: {url}")
+        return None
+
 
 def save_to_github(all_data_dict, message):
     """모든 시트 데이터를 GitHub에 저장합니다."""
