@@ -14,8 +14,8 @@ BRANCH = "main"
 
 def save_to_github(file_content, message):
     """GitHub API를 통해 파일을 저장소에 푸시합니다."""
-    url = f"https://api.github.com/repos/baedw0629-source/materialupdate/contents/material_database.xlsx"
-    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+    url = f"https://api.github.com/repos/{REPO_NAME}/contents/{DB_FILE}"
+    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
     
     # 기존 파일의 SHA 값 가져오기 (덮어쓰기 위해 필요)
     res = requests.get(url, headers=headers)
