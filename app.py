@@ -25,12 +25,13 @@ def load_all_data():
     if os.path.exists(DB_FILE):
         return pd.read_excel(DB_FILE, sheet_name=None)
     else:
+        # 초기 파일 구조 생성
         return {
             "material": pd.DataFrame(columns=SHEET_CONFIG["material"]["columns"]),
-            "cover": pd.DataFrame(columns=SHEET_CONFIG["cover"]["columns"])
+            "cover": pd.DataFrame(columns=SHEET_CONFIG["cover"]["columns"]),
+            "update_log": pd.DataFrame(columns=["일시", "카테고리", "변경건수", "추가건수"])
         }
 
-# 엑셀 양식 생성을 위한 함수
 def generate_template(columns):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -39,92 +40,131 @@ def generate_template(columns):
 
 st.set_page_config(page_title="자재/마감재 단가 관리 시스템", layout="wide")
 
-# 제목 수정
+# 1. 제목 (날짜 제거)
 st.title("🏗️ 자재/마감재 단가 관리 시스템")
 
 all_sheets = load_all_data()
+log_df = all_sheets.get("update_log", pd.DataFrame(columns=["일시", "카테고리", "변경건수", "추가건수"]))
 
-# 1. 카테고리 선택
+# 2. 최근 업데이트 내역 표시 (최근 4개)
+if not log_df.empty:
+    st.write("🕒 **최근 업데이트 내역**")
+    recent_logs = log_df.sort_values(by="일시", ascending=False).head(4)
+    cols = st.columns(4)
+    for i, (idx, row) in enumerate(recent_logs.iterrows()):
+        with cols[i]:
+            st.info(f"**{row['카테고리']}** ({row['일시']})\n\n변동:{row['변경건수']} / 신규:{row['추가건수']}")
+
+st.divider()
+
+# 3. 카테고리 선택 및 현황 표시
 category = st.sidebar.radio("카테고리 선택", ["material", "cover"], format_func=lambda x: SHEET_CONFIG[x]["name"])
 conf = SHEET_CONFIG[category]
 df_master = all_sheets.get(category, pd.DataFrame(columns=conf["columns"]))
 
-# 오늘 날짜 기준 헤더 수정
-today_str = datetime.now().strftime("%Y-%m-%d")
-st.subheader(f"📍 {SHEET_CONFIG[category]['name']} 단가 기준 ({today_str})")
+st.subheader(f"📍 {SHEET_CONFIG[category]['name']} 단가 기준")
 st.dataframe(df_master, use_container_width=True)
 
-# 2. 양식 다운로드 및 업로드 섹션
+# 4. 양식 및 업로드 섹션
 st.divider()
 col_down, col_up = st.columns([1, 3])
 
 with col_down:
     st.write("📋 **양식 다운로드**")
-    template_data = generate_template(conf["columns"])
     st.download_button(
-        label=f"{conf['name']} 업로드 양식 받기",
-        data=template_data,
+        label=f"{conf['name']} 양식 받기",
+        data=generate_template(conf["columns"]),
         file_name=f"{category}_template.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="template_download"
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
 with col_up:
-    # 문구 수정 (이모티콘 제거 및 이름 변경)
     st.write(f"📤 **신규 단가 데이터 업로드 ({conf['name']})**")
-    uploaded_file = st.file_uploader("수정 또는 추가할 엑셀 파일을 선택하세요", type=["xlsx"], label_visibility="collapsed")
+    uploaded_file = st.file_uploader("파일을 선택하세요", type=["xlsx"], label_visibility="collapsed")
 
 if uploaded_file:
     df_new = pd.read_excel(uploaded_file)
+    # 빈 칸(NaN) 처리
+    df_new = df_new.where(pd.notnull(df_new), None)
+    
     keys = conf["keys"]
     price_col = conf["price_col"]
     
-    # 데이터 비교 로직
+    # 데이터 비교
     df_compare = pd.merge(df_master, df_new, on=keys, how='outer', suffixes=('_기존', '_신규'))
 
+    # 변경/추가 내역 분석
     changed = df_compare[
         df_compare[f'{price_col}_기존'].notnull() & 
         df_compare[f'{price_col}_신규'].notnull() & 
         (df_compare[f'{price_col}_기존'] != df_compare[f'{price_col}_신규'])
     ].copy()
-    
     added = df_compare[df_compare[f'{price_col}_기존'].isnull()].copy()
 
-    # 변경 내역 표시
-    report_col1, report_col2 = st.columns(2)
-    with report_col1:
-        st.warning(f"⚠️ 단가 변경 건수: {len(changed)}건")
+    # 화면 표시
+    rep1, rep2 = st.columns(2)
+    with rep1:
+        st.warning(f"⚠️ 단가 변경: {len(changed)}건")
         if not changed.empty:
             st.dataframe(changed[keys + [f'{price_col}_기존', f'{price_col}_신규']], use_container_width=True)
-
-    with report_col2:
-        st.success(f"➕ 신규 추가 건수: {len(added)}건")
+    with rep2:
+        st.success(f"➕ 신규 추가: {len(added)}건")
         if not added.empty:
-            display_added = added.drop(columns=[c for c in added.columns if '_기존' in c])
-            display_added.columns = [c.replace('_신규', '') for c in display_added.columns]
-            st.dataframe(display_added[conf["columns"]], use_container_width=True)
+            st.dataframe(added[keys + [f'{price_col}_신규']], use_container_width=True)
 
     if st.button("✅ 변경 사항 최종 반영 및 저장"):
-        df_master_clean = df_master.set_index(keys).drop(index=df_new.set_index(keys).index, errors='ignore').reset_index()
-        df_updated = pd.concat([df_master_clean, df_new], ignore_index=True)
-        df_updated = df_updated[conf["columns"]]
+        # --- 정교화된 업데이트 로직 ---
+        updated_rows = []
         
-        all_sheets[category] = df_updated
+        # 1. 기존 데이터 업데이트 및 유지
+        for _, row in df_compare.iterrows():
+            new_data = {}
+            # 기존 데이터가 없는 경우 (신규 추가)
+            if pd.isna(row[f'{conf["columns"][-1]}_기존']) and not any(pd.isna(row[keys])):
+                for col in conf["columns"]:
+                    new_data[col] = row[f'{col}_신규'] if f'{col}_신규' in row else row.get(col)
+            # 기존 데이터가 있는 경우 (수정)
+            else:
+                for col in conf["columns"]:
+                    if col in keys:
+                        new_data[col] = row[col]
+                    elif col == price_col:
+                        # 단가는 무조건 신규 값 (신규가 없으면 기존 유지)
+                        new_data[col] = row[f'{col}_신규'] if pd.notnull(row[f'{col}_신규']) else row[f'{col}_기존']
+                    else:
+                        # 기타 필드는 신규 값이 있을 때만 업데이트, 비어있으면 기존 유지
+                        if pd.notnull(row.get(f'{col}_신규')):
+                            new_data[col] = row[f'{col}_신규']
+                        else:
+                            new_data[col] = row[f'{col}_기존']
+            
+            if any(new_data.values()):
+                updated_rows.append(new_data)
+
+        df_final = pd.DataFrame(updated_rows)[conf["columns"]]
+        
+        # 로그 기록 추가
+        new_log = {
+            "일시": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "카테고리": conf['name'],
+            "변경건수": len(changed),
+            "추가건수": len(added)
+        }
+        log_df = pd.concat([log_df, pd.DataFrame([new_log])], ignore_index=True)
+
+        # 파일 저장
+        all_sheets[category] = df_final
+        all_sheets["update_log"] = log_df
+        
         with pd.ExcelWriter(DB_FILE, engine='xlsxwriter') as writer:
             for s_name, data in all_sheets.items():
                 data.to_excel(writer, sheet_name=s_name, index=False)
         
-        st.balloons()
         st.success("데이터베이스 업데이트 완료!")
         st.rerun()
 
-# 4. 전체 마스터 데이터 다운로드
+# 5. 사이드바 다운로드
 if os.path.exists(DB_FILE):
     with open(DB_FILE, "rb") as f:
         st.sidebar.divider()
-        st.sidebar.download_button(
-            label="💾 전체 데이터베이스 다운로드",
-            data=f,
-            file_name="material_database_updated.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        st.sidebar.download_button("💾 전체 DB 다운로드", f, file_name="material_db.xlsx")
