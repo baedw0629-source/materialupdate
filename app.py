@@ -113,31 +113,66 @@ with tab1:
             st.rerun()
         else:
             st.error(f"❌ 저장 실패: {msg}")
-
-# [엑셀 업데이트]
+            
+# [탭 2: 엑셀 업데이트]
 with tab2:
     st.subheader(f"📤 {conf['name']} 엑셀 업로드")
-    uploaded = st.file_uploader("파일 선택", type=["xlsx"])
+    
+    # 양식 다운로드 버튼 부분은 기존과 동일
+    output_tmpl = io.BytesIO()
+    with pd.ExcelWriter(output_tmpl, engine='xlsxwriter') as writer:
+        pd.DataFrame(columns=conf["columns"]).to_excel(writer, index=False)
+    st.download_button(f"📋 {conf['name']} 업로드 양식 받기", output_tmpl.getvalue(), f"{category}_template.xlsx")
+    
+    uploaded = st.file_uploader("수정할 엑셀 파일을 선택하세요", type=["xlsx"])
     
     if uploaded:
-        df_new = pd.read_excel(uploaded).where(pd.notnull(pd.read_excel(uploaded)), None)
-        df_master = st.session_state.db[category]
+        # 1. 파일 읽기 (모든 값을 문자열로 일단 읽어서 타입 충돌 방지)
+        df_new = pd.read_excel(uploaded).astype(object)
+        # NaN 값을 None으로 변환하여 처리하기 쉽게 만듦
+        df_new = df_new.where(pd.notnull(df_new), None)
+        
+        df_master = st.session_state.db[category].copy().astype(object)
         keys = conf["keys"]
         
+        # 2. 인덱스 설정
         m_df = df_master.set_index(keys)
         n_df = df_new.set_index(keys)
         
+        # 3. 변경/추가 건수 계산
         c_count = len(n_df[n_df.index.isin(m_df.index)])
         a_count = len(n_df[~n_df.index.isin(m_df.index)])
         
-        m_df.update(n_df)
-        df_final = pd.concat([m_df, n_df[~n_df.index.isin(m_df.index)]]).reset_index()[conf["columns"]]
+        # 4. 업데이트 로직 (타입 에러 방지를 위해 하나씩 덮어쓰기)
+        # m_df.update(n_df) 대신 더 안전한 방식을 사용합니다.
+        for idx in n_df.index:
+            if idx in m_df.index:
+                for col in n_df.columns:
+                    val = n_df.loc[idx, col]
+                    # 신규 데이터에 값이 있을 때만 업데이트 (빈칸은 유지)
+                    if pd.notnull(val) and val != "":
+                        m_df.at[idx, col] = val
         
+        # 5. 아예 새로운 데이터 추가
+        new_entries = n_df[~n_df.index.isin(m_df.index)]
+        df_final = pd.concat([m_df, new_entries]).reset_index()
+        
+        # 컬럼 순서 복구
+        df_final = df_final[conf["columns"]]
+        
+        st.write("✅ 업데이트 미리보기 (최종 반영 버튼을 눌러야 저장됩니다)")
         st.dataframe(df_final, use_container_width=True)
         
-        if st.button("🚀 GitHub 마스터 반영"):
+        if st.button("🚀 위 내용을 GitHub 마스터 DB에 반영"):
             st.session_state.db[category] = df_final
-            new_log = {"일시": datetime.now().strftime("%Y-%m-%d %H:%M"), "카테고리": conf["name"], "변경건수": c_count, "추가건수": a_count}
+            
+            # 로그 기록
+            new_log = {
+                "일시": datetime.now().strftime("%Y-%m-%d %H:%M"), 
+                "카테고리": conf["name"], 
+                "변경건수": c_count, 
+                "추가건수": a_count
+            }
             st.session_state.db["update_log"] = pd.concat([log_df, pd.DataFrame([new_log])], ignore_index=True)
             
             success, msg = save_to_github(st.session_state.db, f"{conf['name']} 엑셀 반영")
@@ -147,3 +182,4 @@ with tab2:
                 st.rerun()
             else:
                 st.error(f"❌ 동기화 실패: {msg}")
+                
