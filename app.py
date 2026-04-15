@@ -125,7 +125,8 @@ with tab2:
     # 양식 받기 (기본 코드 유지)
     tmpl_bytes = io.BytesIO()
     with pd.ExcelWriter(tmpl_bytes, engine='xlsxwriter') as writer:
-        pd.DataFrame(columns=conf["columns"]).to_excel(writer, sheet_name=6, index=False)
+        # sheet_name을 숫자가 아닌 문자로 수정했습니다.
+    pd.DataFrame(columns=conf["columns"]).to_excel(writer, sheet_name="Sheet1", index=False)
     st.download_button(f"📋 {conf['name']} 양식 받기", tmpl_bytes.getvalue(), f"{category}_template.xlsx")
     
     uploaded = st.file_uploader("파일 선택", type=["xlsx"])
