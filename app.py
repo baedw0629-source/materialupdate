@@ -122,78 +122,106 @@ with tab1:
 with tab2:
     st.subheader(f"📤 {conf['name']} 엑셀 업로드")
     
-    # 양식 받기
+    # 양식 받기 (기본 코드 유지)
     tmpl_bytes = io.BytesIO()
     with pd.ExcelWriter(tmpl_bytes, engine='xlsxwriter') as writer:
-        pd.DataFrame(columns=conf["columns"]).to_excel(writer, index=False)
+        pd.DataFrame(columns=conf["columns"]).to_excel(writer, sheet_name=6, index=False)
     st.download_button(f"📋 {conf['name']} 양식 받기", tmpl_bytes.getvalue(), f"{category}_template.xlsx")
     
     uploaded = st.file_uploader("파일 선택", type=["xlsx"])
     if uploaded:
-        # 데이터 클리닝
+        # 1. 데이터 클리닝 및 중복 제거 (핵심!)
         df_new_raw = pd.read_excel(uploaded).astype(object)
-        # 양식에 있는 컬럼만 남기기 (KeyError 방지 핵심)
         available_cols = [c for c in conf["columns"] if c in df_new_raw.columns]
         df_new = df_new_raw[available_cols].where(pd.notnull(df_new_raw[available_cols]), None)
         
-        df_master = st.session_state.db[category].copy().astype(object)
+        # 업로드된 파일 자체에 중복이 있을 경우 첫 번째 것만 남김
         keys = conf["keys"]
+        df_new = df_new.drop_duplicates(subset=keys, keep='first')
         
-        # 인덱스 설정 전 중복 제거 (m_df_final에서 수행)
+        df_master = st.session_state.db[category].copy().astype(object)
+        
+        # 2. 인덱스 설정 (비교를 위해)
         m_df = df_master.set_index(keys)
         n_df = df_new.set_index(keys)
 
         added_rows, changed_rows = [], []
-        
-        # 비교용 컬럼 (인덱스 제외)
         compare_cols = [c for c in n_df.columns if c in m_df.columns]
 
+        # 3. 데이터 비교 루프 (에러 방지 강화)
         for idx in n_df.index:
             if idx not in m_df.index:
+                # [신규 추가]
                 row = n_df.loc[idx].to_dict()
                 if isinstance(idx, tuple):
                     for i, k in enumerate(keys): row[k] = idx[i]
                 added_rows.append(row)
             else:
+                # [변경 체크] 
                 is_changed = False
                 for col in compare_cols:
-                    # 마스터 데이터에 중복이 있을 경우 첫 번째 값을 기준으로 비교
-                    ov_series = m_df.loc[[idx], col]
-                    ov = ov_series.iloc[0] if len(ov_series) > 0 else None
-                    nv = n_df.loc[idx, col]
+                    # 마스터에서 값 추출 (여러 개일 경우 첫 번째 값만 scalar로 추출)
+                    ov_raw = m_df.loc[[idx], col]
+                    ov = ov_raw.values[0] if len(ov_raw) > 0 else None
                     
-                    if pd.notnull(nv) and nv != "" and str(nv).strip() != str(ov).strip():
-                        is_changed = True; break
+                    # 신규 데이터에서 값 추출
+                    nv_raw = n_df.loc[[idx], col]
+                    nv = nv_raw.values[0] if len(nv_raw) > 0 else None
+                    
+                    # 비교 로직 (단일 값임을 보장한 후 비교)
+                    if pd.notnull(nv) and str(nv).strip() != "":
+                        if str(nv).strip() != str(ov).strip():
+                            is_changed = True
+                            break
+                
                 if is_changed:
                     row = n_df.loc[idx].to_dict()
                     if isinstance(idx, tuple):
                         for i, k in enumerate(keys): row[k] = idx[i]
                     changed_rows.append(row)
 
+        # 4. 화면 표시
         c1, c2 = st.columns(2)
-        c1.warning(f"⚠️ 변경: {len(changed_rows)}건"); c1.dataframe(pd.DataFrame(changed_rows), use_container_width=True)
-        c2.success(f"➕ 신규: {len(added_rows)}건"); c2.dataframe(pd.DataFrame(added_rows), use_container_width=True)
+        c1.warning(f"⚠️ 변경: {len(changed_rows)}건")
+        c1.dataframe(pd.DataFrame(changed_rows), use_container_width=True)
+        c2.success(f"➕ 신규: {len(added_rows)}건")
+        c2.dataframe(pd.DataFrame(added_rows), use_container_width=True)
 
+        # 5. 최종 반영 버튼
         if st.button("🚀 마스터 DB 최종 반영"):
-            # 마스터 중복 제거 (덮어쓰기 에러 방지)
+            # 마스터 중복 정리
             m_df_final = m_df[~m_df.index.duplicated(keep='first')].copy()
             
             for idx in n_df.index:
                 if idx in m_df_final.index:
                     for col in compare_cols:
-                        val = n_df.loc[idx, col]
+                        # 신규 값 추출
+                        val_raw = n_df.loc[[idx], col]
+                        val = val_raw.values[0] if len(val_raw) > 0 else None
+                        
                         if pd.notnull(val) and str(val).strip() != "":
-                            m_df_final.loc[idx, col] = val
+                            m_df_final.at[idx, col] = val
             
-            # 최종 결합
+            # 최종 결합 및 컬럼 순서 복구
             final_df = pd.concat([m_df_final, n_df[~n_df.index.isin(m_df_final.index)]]).reset_index()
             final_df = final_df[[c for c in conf["columns"] if c in final_df.columns]]
             
             st.session_state.db[category] = final_df
-            new_log = {"일시": datetime.now().strftime("%Y-%m-%d %H:%M"), "카테고리": conf["name"], "변경건수": len(changed_rows), "추가건수": len(added_rows)}
+            
+            # 로그 기록
+            new_log = {
+                "일시": datetime.now().strftime("%Y-%m-%d %H:%M"), 
+                "카테고리": conf["name"], 
+                "변경건수": len(changed_rows), 
+                "추가건수": len(added_rows)
+            }
             st.session_state.db["update_log"] = pd.concat([log_df, pd.DataFrame([new_log])], ignore_index=True)
             
             success, code = save_to_github(st.session_state.db, f"{conf['name']} 엑셀 업데이트")
             if success:
-                st.toast("동기화 완료!"); st.rerun()
-            else: st.error(f"저장 실패 (코드: {code})")
+                st.toast("✅ 동기화 완료!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error(f"❌ 저장 실패 (코드: {code})")
+        
