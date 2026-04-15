@@ -66,8 +66,8 @@ def get_excel_bytes(db_dict):
 
 # --- 3. 앱 레이아웃 ---
 
-st.set_page_config(page_title="자재/마감재 통합 관리 시스템", layout="wide")
-st.title("🏗️ 자재/마감재 통합 관리 시스템")
+st.set_page_config(page_title="자재/마감재 단가 관리 시스템", layout="wide")
+st.title("🏗️ 자재/마감재 단가 관리 시스템")
 
 if 'db' not in st.session_state:
     loaded = load_from_github()
@@ -95,7 +95,7 @@ conf = SHEET_CONFIG[category]
 st.sidebar.divider()
 st.sidebar.download_button("💾 전체 데이터 백업 (Excel)", get_excel_bytes(st.session_state.db), f"full_db_{datetime.now().strftime('%m%d')}.xlsx")
 
-tab1, tab2 = st.tabs(["✏️ 직접 편집 및 확인", "📤 엑셀 일괄 업데이트"])
+tab1, tab2 = st.tabs(["✏️ 데이터 확인", "📤 엑셀 일괄 업데이트"])
 
 # [탭 1: 직접 편집]
 with tab1:
@@ -105,7 +105,7 @@ with tab1:
         st.session_state.db[category] = edited_df
         success, code = save_to_github(st.session_state.db, f"{conf['name']} 직접 편집 저장")
         if success:
-            st.toast("✅ GitHub 저장 완료!"); time.sleep(1); st.rerun()
+            st.toast("✅ DB 저장 완료!"); time.sleep(1); st.rerun()
         else: st.error(f"❌ 저장 실패 (코드: {code})")
 
 # [탭 2: 엑셀 업데이트]
@@ -164,7 +164,7 @@ with tab2:
         c1.warning(f"⚠️ 변경: {len(changed_rows)}건"); c1.dataframe(pd.DataFrame(changed_rows), use_container_width=True)
         c2.success(f"➕ 신규: {len(added_rows)}건"); c2.dataframe(pd.DataFrame(added_rows), use_container_width=True)
 
-        if st.button("🚀 마스터 DB 최종 반영"):
+        if st.button("🚀 DB 최종 반영"):
             m_df_final = m_df[~m_df.index.duplicated(keep='first')].copy()
             for idx in n_df.index:
                 if idx in m_df_final.index:
@@ -184,5 +184,5 @@ with tab2:
             
             success, code = save_to_github(st.session_state.db, f"{conf['name']} 엑셀 반영")
             if success:
-                st.toast("✅ 동기화 완료!"); time.sleep(1); st.rerun()
+                st.toast("✅ DB 저장 완료!"); time.sleep(1); st.rerun()
             else: st.error(f"❌ 저장 실패 (코드: {code})")
