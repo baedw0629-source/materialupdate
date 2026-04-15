@@ -109,14 +109,14 @@ if not log_df.empty:
 
 st.divider()
 
-# 사이드바: 카테고리 선택 및 백업 다운로드
+# 사이드바: 카테고리 선택 및  다운로드
 category = st.sidebar.radio("카테고리 선택", ["material", "cover"], format_func=lambda x: SHEET_CONFIG[x]["name"])
 conf = SHEET_CONFIG[category]
 
 st.sidebar.divider()
-st.sidebar.write("💾 **데이터 백업**")
+st.sidebar.write("💾 **데이터 다운로드**")
 st.sidebar.download_button(
-    label="전체 데이터 백업 (Excel)",
+    label="전체 데이터 다운로드 (Excel)",
     data=get_excel_bytes(st.session_state.db),
     file_name=f"material_db_backup_{datetime.now().strftime('%m%d')}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
