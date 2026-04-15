@@ -127,59 +127,96 @@ with tab2:
     uploaded = st.file_uploader("수정할 엑셀 파일을 선택하세요", type=["xlsx"])
     
     if uploaded:
-        # 1. 파일 읽기 (모든 값을 문자열로 일단 읽어서 타입 충돌 방지)
+        # 1. 데이터 읽기 및 타입 통일
         df_new = pd.read_excel(uploaded).astype(object)
-        # NaN 값을 None으로 변환하여 처리하기 쉽게 만듦
         df_new = df_new.where(pd.notnull(df_new), None)
         
         df_master = st.session_state.db[category].copy().astype(object)
         keys = conf["keys"]
         
-        # 2. 인덱스 설정
         m_df = df_master.set_index(keys)
         n_df = df_new.set_index(keys)
+
+        # --- 변경 및 추가 데이터 감지 ---
+        added_rows = []
+        changed_rows = []
         
-        # 3. 변경/추가 건수 계산
-        c_count = len(n_df[n_df.index.isin(m_df.index)])
-        a_count = len(n_df[~n_df.index.isin(m_df.index)])
-        
-        # 4. 업데이트 로직 (타입 에러 방지를 위해 하나씩 덮어쓰기)
-        # m_df.update(n_df) 대신 더 안전한 방식을 사용합니다.
+        # 신규/변경 체크
         for idx in n_df.index:
-            if idx in m_df.index:
+            if idx not in m_df.index:
+                # [추가] 기존에 없는 데이터
+                row = n_df.loc[idx].to_dict()
+                if isinstance(idx, tuple):
+                    for i, k in enumerate(keys): row[k] = idx[i]
+                else:
+                    row[keys[0]] = idx
+                added_rows.append(row)
+            else:
+                # [변경] 기존에 있는데 값이 다른 데이터
+                is_changed = False
+                for col in n_df.columns:
+                    new_val = n_df.loc[idx, col]
+                    old_val = m_df.loc[idx, col]
+                    # 신규 값이 있고(빈칸 아님), 기존 값과 다를 때만 '변경'으로 간주
+                    if pd.notnull(new_val) and new_val != "" and str(new_val) != str(old_val):
+                        is_changed = True
+                        break
+                
+                if is_changed:
+                    row = n_df.loc[idx].to_dict()
+                    if isinstance(idx, tuple):
+                        for i, k in enumerate(keys): row[k] = idx[i]
+                    else:
+                        row[keys[0]] = idx
+                    changed_rows.append(row)
+
+        df_added_preview = pd.DataFrame(added_rows)
+        df_changed_preview = pd.DataFrame(changed_rows)
+
+        # --- 화면 표시 ---
+        st.write("🔍 **업데이트 예정 내역 미리보기**")
+        
+        col_view1, col_view2 = st.columns(2)
+        with col_view1:
+            st.warning(f"⚠️ 단가/정보 변경: {len(df_changed_preview)}건")
+            if not df_changed_preview.empty:
+                st.dataframe(df_changed_preview[conf["columns"]], use_container_width=True)
+        
+        with col_view2:
+            st.success(f"➕ 신규 항목 추가: {len(df_added_preview)}건")
+            if not df_added_preview.empty:
+                st.dataframe(df_added_preview[conf["columns"]], use_container_width=True)
+
+        # --- 실제 반영용 전체 데이터 생성 (버튼 클릭 시 저장될 데이터) ---
+        # 기존 마스터를 복사해서 업데이트 진행
+        m_df_final = m_df.copy()
+        for idx in n_df.index:
+            if idx in m_df_final.index:
                 for col in n_df.columns:
                     val = n_df.loc[idx, col]
-                    # 신규 데이터에 값이 있을 때만 업데이트 (빈칸은 유지)
                     if pd.notnull(val) and val != "":
-                        m_df.at[idx, col] = val
+                        m_df_final.at[idx, col] = val
         
-        # 5. 아예 새로운 데이터 추가
-        new_entries = n_df[~n_df.index.isin(m_df.index)]
-        df_final = pd.concat([m_df, new_entries]).reset_index()
-        
-        # 컬럼 순서 복구
-        df_final = df_final[conf["columns"]]
-        
-        st.write("✅ 업데이트 미리보기 (최종 반영 버튼을 눌러야 저장됩니다)")
-        st.dataframe(df_final, use_container_width=True)
-        
-        if st.button("🚀 위 내용을 GitHub 마스터 DB에 반영"):
-            st.session_state.db[category] = df_final
+        new_entries = n_df[~n_df.index.isin(m_df_final.index)]
+        df_final_to_save = pd.concat([m_df_final, new_entries]).reset_index()[conf["columns"]]
+
+        if st.button("🚀 위 변경 사항만 확인했습니다. 마스터 DB 반영!"):
+            st.session_state.db[category] = df_final_to_save
             
-            # 로그 기록
+            # 로그 기록 및 저장 로직은 기존과 동일...
             new_log = {
-                "일시": datetime.now().strftime("%Y-%m-%d %H:%M"), 
-                "카테고리": conf["name"], 
-                "변경건수": c_count, 
-                "추가건수": a_count
+                "일시": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "카테고리": conf["name"],
+                "변경건수": len(df_changed_preview),
+                "추가건수": len(df_added_preview)
             }
             st.session_state.db["update_log"] = pd.concat([log_df, pd.DataFrame([new_log])], ignore_index=True)
             
-            success, msg = save_to_github(st.session_state.db, f"{conf['name']} 엑셀 반영")
+            success, msg = save_to_github(st.session_state.db, f"{conf['name']} 엑셀 업데이트")
             if success:
                 st.toast("✅ 동기화 완료!", icon="🚀")
                 time.sleep(1)
                 st.rerun()
             else:
-                st.error(f"❌ 동기화 실패: {msg}")
+                st.error(f"❌ 저장 실패: {msg}")
                 
