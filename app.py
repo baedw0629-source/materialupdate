@@ -220,3 +220,37 @@ with tab2:
             else:
                 st.error(f"❌ 저장 실패: {msg}")
                 
+def get_excel_bytes(db_dict):
+    """현재 세션 상태의 모든 시트를 하나의 엑셀 파일로 변환"""
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        for s_name, data in db_dict.items():
+            # 데이터가 비어있지 않은 경우에만 시트 생성
+            df = pd.DataFrame(data)
+            df.to_excel(writer, sheet_name=s_name, index=False)
+    return output.getvalue()
+
+# [탭 2: 엑셀 업데이트] 내부의 if st.button("🚀 위 내용을 GitHub 마스터 DB에 반영"): 블록 내부
+if success:
+    st.toast("✅ 동기화 완료!", icon="🚀")
+    # 반영 성공 후 즉시 다운로드 버튼 노출 (사용자 편의성)
+    st.download_button(
+        label="📥 업데이트된 결과 파일 즉시 받기",
+        data=get_excel_bytes(st.session_state.db),
+        file_name=f"updated_{category}_{datetime.now().strftime('%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="download_after_success"
+    )
+    time.sleep(2) # 메시지를 볼 시간을 조금 더 줌
+    st.rerun()
+
+# 사이드바 최하단에 배치
+st.sidebar.divider()
+st.sidebar.write("💾 **데이터 관리**")
+if 'db' in st.session_state:
+    st.sidebar.download_button(
+        label="전체 데이터베이스 다운로드",
+        data=get_excel_bytes(st.session_state.db),
+        file_name=f"material_db_full_{datetime.now().strftime('%m%d_%H%M')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
